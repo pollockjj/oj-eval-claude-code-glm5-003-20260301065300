@@ -283,31 +283,54 @@ private:
         auto it = team.problems.find(p);
         if (it != team.problems.end()) {
             ProblemState& ps = it->second;
-            // Now we reveal the result: if there was an Accepted submission during freeze,
-            // mark it as solved
-            int acceptedTime = -1;
-            int wrongAfterSolve = 0;
-            bool solvedDuringFreeze = false;
-            int wrongBeforeSolveDuringFreeze = ps.wrongBeforeFreeze;
 
+            // We need to process the frozen submissions
+            // The state is: ps.wrongBeforeFreeze wrong before freeze, ps.submitAfterFreeze submissions during freeze
+            // We need to determine which frozen submissions were Accepted or wrong
+
+            // Get all submissions for this problem
+            vector<pair<Status, int>> frozenSubs;  // status, time
+            int totalSubs = 0;
             for (const auto& sub : team.submissions) {
                 if (sub.problem == p) {
-                    if (sub.status == Status::Accepted && acceptedTime == -1) {
-                        acceptedTime = sub.time;
-                        solvedDuringFreeze = true;
-                    } else if (acceptedTime == -1) {
-                        // Wrong submission before first accepted
-                        if (!ps.solvedBeforeFreeze) {
-                            wrongBeforeSolveDuringFreeze++;
-                        }
+                    totalSubs++;
+                }
+            }
+
+            // Submissions during freeze are the last (submitAfterFreeze) submissions for this problem
+            int preFreezeCount = totalSubs - ps.submitAfterFreeze;
+            int idx = 0;
+            for (const auto& sub : team.submissions) {
+                if (sub.problem == p) {
+                    idx++;
+                    if (idx > preFreezeCount) {
+                        frozenSubs.push_back({sub.status, sub.time});
                     }
+                }
+            }
+
+            // Find first Accepted in frozen submissions
+            int acceptedTime = -1;
+            bool solvedDuringFreeze = false;
+            int wrongDuringFreeze = 0;
+
+            for (const auto& sub : frozenSubs) {
+                if (sub.first == Status::Accepted && acceptedTime == -1) {
+                    acceptedTime = sub.second;
+                    solvedDuringFreeze = true;
+                } else if (acceptedTime == -1) {
+                    wrongDuringFreeze++;
                 }
             }
 
             if (solvedDuringFreeze) {
                 ps.solved = true;
                 ps.solveTime = acceptedTime;
-                ps.wrongBeforeSolve = wrongBeforeSolveDuringFreeze;
+                ps.wrongBeforeSolve = ps.wrongBeforeFreeze + wrongDuringFreeze;
+                ps.wrongTotal = ps.wrongBeforeSolve;
+            } else {
+                // Not solved during freeze
+                ps.wrongTotal = ps.wrongBeforeFreeze + wrongDuringFreeze;
             }
 
             // Clear frozen state
