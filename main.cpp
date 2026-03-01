@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <algorithm>
 #include <sstream>
 
@@ -86,7 +87,7 @@ struct Team {
 
 class ICPCSystem {
 private:
-    map<string, Team> teams;
+    unordered_map<string, Team> teams;
     bool started = false;
     int duration = 0;
     int problemCount = 0;
