@@ -325,7 +325,7 @@ private:
             if (teamsWithFrozen.empty()) break;
 
             sort(teamsWithFrozen.begin(), teamsWithFrozen.end(), [this](const string& a, const string& b) {
-                return !this->compareTeams(a, b, false);
+                return this->compareTeams(a, b, true);  // Use excludeFrozen for current scoreboard ranking
             });
 
             string teamName = teamsWithFrozen.back();
