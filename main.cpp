@@ -2,14 +2,11 @@
 #include <string>
 #include <vector>
 #include <map>
-#include <set>
 #include <algorithm>
 #include <sstream>
-#include <iomanip>
 
 using namespace std;
 
-// Status for a problem submission
 enum class Status {
     Accepted,
     Wrong_Answer,
@@ -34,37 +31,48 @@ string statusToString(Status s) {
     return "";
 }
 
-// Submission record
 struct Submission {
     char problem;
     Status status;
     int time;
-    bool afterFreeze;
 };
 
-// Problem state for a team
 struct ProblemState {
-    int wrongAttempts = 0;      // Total wrong attempts
     int wrongBeforeFreeze = 0;  // Wrong attempts before freeze
     int submitAfterFreeze = 0;  // Submissions after freeze
+    int wrongTotal = 0;         // Total wrong attempts
     bool solved = false;
     int solveTime = 0;
-    bool frozen = false;        // Is this problem in frozen state
+    bool solvedBeforeFreeze = false;  // Was it solved before freeze?
+    int wrongBeforeSolve = 0;  // Wrong attempts before first solve
 };
 
-// Team information
 struct Team {
     string name;
     map<char, ProblemState> problems;
     vector<Submission> submissions;
+};
 
-    int getSolvedCount(int problemCount, bool includeFrozen = true) const {
+class ICPCSystem {
+private:
+    map<string, Team> teams;
+    bool started = false;
+    int duration = 0;
+    int problemCount = 0;
+    bool frozen = false;
+    bool flushed = false;
+    vector<string> teamOrder;  // Order after last flush
+
+    // Get solved count (optionally excluding currently frozen problems)
+    int getSolvedCount(const Team& team, bool excludeFrozen = false) const {
         int count = 0;
         for (int i = 0; i < problemCount; i++) {
             char p = 'A' + i;
-            auto it = problems.find(p);
-            if (it != problems.end() && it->second.solved) {
-                if (includeFrozen || !it->second.frozen) {
+            auto it = team.problems.find(p);
+            if (it != team.problems.end() && it->second.solved) {
+                // Exclude if: we want to exclude frozen, AND this problem is currently frozen
+                bool isFrozen = !it->second.solvedBeforeFreeze && it->second.submitAfterFreeze > 0;
+                if (!excludeFrozen || !isFrozen) {
                     count++;
                 }
             }
@@ -72,27 +80,31 @@ struct Team {
         return count;
     }
 
-    int getTotalPenalty(int problemCount, bool includeFrozen = true) const {
+    // Get penalty time (optionally excluding currently frozen problems)
+    int getPenaltyTime(const Team& team, bool excludeFrozen = false) const {
         int penalty = 0;
         for (int i = 0; i < problemCount; i++) {
             char p = 'A' + i;
-            auto it = problems.find(p);
-            if (it != problems.end() && it->second.solved) {
-                if (includeFrozen || !it->second.frozen) {
-                    penalty += 20 * it->second.wrongAttempts + it->second.solveTime;
+            auto it = team.problems.find(p);
+            if (it != team.problems.end() && it->second.solved) {
+                bool isFrozen = !it->second.solvedBeforeFreeze && it->second.submitAfterFreeze > 0;
+                if (!excludeFrozen || !isFrozen) {
+                    penalty += 20 * it->second.wrongBeforeSolve + it->second.solveTime;
                 }
             }
         }
         return penalty;
     }
 
-    vector<int> getSolveTimes(int problemCount, bool includeFrozen = true) const {
+    // Get solve times sorted descending (optionally excluding currently frozen)
+    vector<int> getSolveTimes(const Team& team, bool excludeFrozen = false) const {
         vector<int> times;
         for (int i = 0; i < problemCount; i++) {
             char p = 'A' + i;
-            auto it = problems.find(p);
-            if (it != problems.end() && it->second.solved) {
-                if (includeFrozen || !it->second.frozen) {
+            auto it = team.problems.find(p);
+            if (it != team.problems.end() && it->second.solved) {
+                bool isFrozen = !it->second.solvedBeforeFreeze && it->second.submitAfterFreeze > 0;
+                if (!excludeFrozen || !isFrozen) {
                     times.push_back(it->second.solveTime);
                 }
             }
@@ -100,130 +112,129 @@ struct Team {
         sort(times.begin(), times.end(), greater<int>());
         return times;
     }
-};
 
-class ICPCSystem {
-private:
-    map<string, Team> teams;
-    bool competitionStarted = false;
-    int durationTime = 0;
-    int problemCount = 0;
-    bool frozen = false;
-    bool flushed = false;
-
-    // Team order after last flush (for ranking queries)
-    vector<string> teamOrder;
-
-    // Compare two teams for ranking (returns true if a ranks higher than b)
-    bool compareTeams(const string& a, const string& b, bool includeFrozen = true) const {
+    // Compare teams for ranking (returns true if a ranks higher than b)
+    bool compareTeams(const string& a, const string& b, bool excludeFrozen = false) const {
         auto itA = teams.find(a);
         auto itB = teams.find(b);
-
         const Team& teamA = itA->second;
         const Team& teamB = itB->second;
 
-        int solvedA = teamA.getSolvedCount(problemCount, includeFrozen);
-        int solvedB = teamB.getSolvedCount(problemCount, includeFrozen);
+        int solvedA = getSolvedCount(teamA, excludeFrozen);
+        int solvedB = getSolvedCount(teamB, excludeFrozen);
         if (solvedA != solvedB) return solvedA > solvedB;
 
-        int penaltyA = teamA.getTotalPenalty(problemCount, includeFrozen);
-        int penaltyB = teamB.getTotalPenalty(problemCount, includeFrozen);
+        int penaltyA = getPenaltyTime(teamA, excludeFrozen);
+        int penaltyB = getPenaltyTime(teamB, excludeFrozen);
         if (penaltyA != penaltyB) return penaltyA < penaltyB;
 
-        vector<int> timesA = teamA.getSolveTimes(problemCount, includeFrozen);
-        vector<int> timesB = teamB.getSolveTimes(problemCount, includeFrozen);
+        vector<int> timesA = getSolveTimes(teamA, excludeFrozen);
+        vector<int> timesB = getSolveTimes(teamB, excludeFrozen);
 
         for (size_t i = 0; i < min(timesA.size(), timesB.size()); i++) {
             if (timesA[i] != timesB[i]) return timesA[i] < timesB[i];
         }
 
-        return a < b;  // Lexicographic comparison of names
+        return a < b;
     }
 
-    void flushScoreboard() {
-        teamOrder.clear();
-        for (const auto& p : teams) {
-            teamOrder.push_back(p.first);
-        }
-        sort(teamOrder.begin(), teamOrder.end(),
-             [this](const string& a, const string& b) {
-                 return this->compareTeams(a, b, false);  // Exclude frozen problems for ranking
-             });
-        flushed = true;
-    }
-
-    void printTeamStatus(const string& name, int rank, bool isScroll = false, bool beforeScroll = false) const {
-        const Team& team = teams.at(name);
-        int solved = team.getSolvedCount(problemCount, !beforeScroll);
-        int penalty = team.getTotalPenalty(problemCount, !beforeScroll);
-
-        cout << name << " " << rank << " " << solved << " " << penalty;
-        for (int i = 0; i < problemCount; i++) {
-            char p = 'A' + i;
-            cout << " ";
-            auto it = team.problems.find(p);
-            if (it == team.problems.end() || (it->second.wrongAttempts == 0 && !it->second.solved && it->second.submitAfterFreeze == 0)) {
-                cout << ".";
-            } else if (it->second.frozen && !beforeScroll) {
-                // Frozen state: show wrong before freeze / submissions after freeze
-                int wrong = it->second.wrongBeforeFreeze;
-                int after = it->second.submitAfterFreeze;
-                if (wrong == 0) {
-                    cout << "0/" << after;
-                } else {
-                    cout << "-" << wrong << "/" << after;
-                }
-            } else if (it->second.solved) {
-                // Solved (not frozen or before scroll)
-                int wrong = it->second.wrongAttempts;
-                if (it->second.frozen) {
-                    // Use wrongBeforeFreeze for frozen problems in before scroll view
-                    wrong = it->second.wrongBeforeFreeze;
-                }
-                if (wrong == 0) {
-                    cout << "+";
-                } else {
-                    cout << "+" << wrong;
-                }
-            } else {
-                // Not solved (not frozen or before scroll)
-                int wrong = it->second.wrongAttempts;
-                if (it->second.frozen) {
-                    // Use wrongBeforeFreeze for frozen problems in before scroll view
-                    wrong = it->second.wrongBeforeFreeze;
-                }
-                if (wrong == 0) {
-                    cout << ".";
-                } else {
-                    cout << "-" << wrong;
-                }
-            }
-        }
-        cout << "\n";
-    }
-
-    void printScoreboard(bool beforeScroll = false) const {
+    // Get current ranking order
+    vector<string> getRankingOrder(bool excludeFrozen = false) const {
         vector<string> order;
         for (const auto& p : teams) {
             order.push_back(p.first);
         }
-        sort(order.begin(), order.end(),
-             [this, beforeScroll](const string& a, const string& b) {
-                 return this->compareTeams(a, b, !beforeScroll);
-             });
+        sort(order.begin(), order.end(), [this, excludeFrozen](const string& a, const string& b) {
+            return this->compareTeams(a, b, excludeFrozen);
+        });
+        return order;
+    }
 
-        int rank = 1;
-        for (size_t i = 0; i < order.size(); i++) {
-            if (i > 0 && compareTeams(order[i-1], order[i], !beforeScroll)) {
-                // Not tied with previous team
-                rank = i + 1;
+    void flushScoreboard() {
+        teamOrder = getRankingOrder(true);  // Exclude frozen
+        flushed = true;
+    }
+
+    string formatProblemStatus(const Team& team, char p, bool showFrozen = true) const {
+        auto it = team.problems.find(p);
+        if (it == team.problems.end()) {
+            return ".";
+        }
+
+        const ProblemState& ps = it->second;
+
+        // Check if this problem is currently frozen (and we're showing frozen state)
+        bool isFrozen = showFrozen && !ps.solvedBeforeFreeze && ps.submitAfterFreeze > 0;
+
+        if (isFrozen) {
+            // Frozen: show wrong_before_freeze/submissions_after_freeze
+            int wrong = ps.wrongBeforeFreeze;
+            if (wrong == 0) {
+                return "0/" + to_string(ps.submitAfterFreeze);
+            } else {
+                return "-" + to_string(wrong) + "/" + to_string(ps.submitAfterFreeze);
             }
-            printTeamStatus(order[i], rank, true, beforeScroll);
+        } else if (ps.solved) {
+            // Solved
+            int wrong = ps.wrongBeforeSolve;
+            if (wrong == 0) {
+                return "+";
+            } else {
+                return "+" + to_string(wrong);
+            }
+        } else {
+            // Not solved
+            int wrong = ps.wrongTotal;
+            if (wrong == 0) {
+                return ".";
+            } else {
+                return "-" + to_string(wrong);
+            }
         }
     }
 
-    // Get the stored rank for a team (from last flush)
-    int getTeamRank(const string& name) const {
+    void printTeam(const string& name, int rank, bool excludeFrozen = false, bool showFrozen = true) const {
+        const Team& team = teams.at(name);
+        int solved = getSolvedCount(team, excludeFrozen);
+        int penalty = getPenaltyTime(team, excludeFrozen);
+
+        cout << name << " " << rank << " " << solved << " " << penalty;
+        for (int i = 0; i < problemCount; i++) {
+            char p = 'A' + i;
+            cout << " " << formatProblemStatus(team, p, showFrozen);
+        }
+        cout << "\n";
+    }
+
+    void printScoreboard(bool excludeFrozen = false, bool showFrozen = true) const {
+        vector<string> order = getRankingOrder(excludeFrozen);
+
+        int rank = 1;
+        for (size_t i = 0; i < order.size(); i++) {
+            if (i > 0 && compareTeams(order[i-1], order[i], excludeFrozen)) {
+                rank = i + 1;
+            }
+            printTeam(order[i], rank, excludeFrozen, showFrozen);
+        }
+    }
+
+    int getTeamRankFromOrder(const string& name, const vector<string>& order, bool excludeFrozen) const {
+        for (size_t i = 0; i < order.size(); i++) {
+            if (order[i] == name) {
+                // Calculate actual rank (handling ties)
+                int rank = 1;
+                for (size_t j = 0; j < i; j++) {
+                    if (compareTeams(order[j], order[i], excludeFrozen)) {
+                        rank = j + 2;
+                    }
+                }
+                return rank;
+            }
+        }
+        return -1;
+    }
+
+    int getStoredRank(const string& name) const {
         if (!flushed) {
             // Before first flush, use lexicographic order
             vector<string> order;
@@ -236,51 +247,72 @@ private:
             }
             return -1;
         }
-
-        for (size_t i = 0; i < teamOrder.size(); i++) {
-            if (teamOrder[i] == name) {
-                // Calculate actual rank based on tied teams
-                int rank = 1;
-                for (size_t j = 0; j < i; j++) {
-                    if (compareTeams(teamOrder[j], teamOrder[i], false)) {
-                        rank = j + 2;
-                    }
-                }
-                return rank;
-            }
-        }
-        return -1;
+        return getTeamRankFromOrder(name, teamOrder, true);
     }
 
-    // Find teams with frozen problems
-    vector<string> getTeamsWithFrozenProblems() const {
-        vector<string> result;
-        for (const auto& p : teams) {
-            for (int i = 0; i < problemCount; i++) {
-                char prob = 'A' + i;
-                auto it = p.second.problems.find(prob);
-                if (it != p.second.problems.end() && it->second.frozen) {
-                    result.push_back(p.first);
-                    break;
-                }
-            }
-        }
-        return result;
-    }
-
-    // Get the problem with smallest letter that is frozen for a team
-    char getSmallestFrozenProblem(const string& teamName) const {
-        auto it = teams.find(teamName);
-        if (it == teams.end()) return '\0';
-
+    // Check if a team has frozen problems
+    bool hasFrozenProblems(const Team& team) const {
         for (int i = 0; i < problemCount; i++) {
             char p = 'A' + i;
-            auto pit = it->second.problems.find(p);
-            if (pit != it->second.problems.end() && pit->second.frozen) {
-                return p;
+            auto it = team.problems.find(p);
+            if (it != team.problems.end()) {
+                if (!it->second.solvedBeforeFreeze && it->second.submitAfterFreeze > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Get smallest frozen problem for a team
+    char getSmallestFrozenProblem(const Team& team) const {
+        for (int i = 0; i < problemCount; i++) {
+            char p = 'A' + i;
+            auto it = team.problems.find(p);
+            if (it != team.problems.end()) {
+                if (!it->second.solvedBeforeFreeze && it->second.submitAfterFreeze > 0) {
+                    return p;
+                }
             }
         }
         return '\0';
+    }
+
+    // Unfreeze a problem for a team
+    void unfreezeProblem(Team& team, char p) {
+        auto it = team.problems.find(p);
+        if (it != team.problems.end()) {
+            ProblemState& ps = it->second;
+            // Now we reveal the result: if there was an Accepted submission during freeze,
+            // mark it as solved
+            int acceptedTime = -1;
+            int wrongAfterSolve = 0;
+            bool solvedDuringFreeze = false;
+            int wrongBeforeSolveDuringFreeze = ps.wrongBeforeFreeze;
+
+            for (const auto& sub : team.submissions) {
+                if (sub.problem == p) {
+                    if (sub.status == Status::Accepted && acceptedTime == -1) {
+                        acceptedTime = sub.time;
+                        solvedDuringFreeze = true;
+                    } else if (acceptedTime == -1) {
+                        // Wrong submission before first accepted
+                        if (!ps.solvedBeforeFreeze) {
+                            wrongBeforeSolveDuringFreeze++;
+                        }
+                    }
+                }
+            }
+
+            if (solvedDuringFreeze) {
+                ps.solved = true;
+                ps.solveTime = acceptedTime;
+                ps.wrongBeforeSolve = wrongBeforeSolveDuringFreeze;
+            }
+
+            // Clear frozen state
+            ps.submitAfterFreeze = 0;
+        }
     }
 
     void scroll() {
@@ -291,89 +323,60 @@ private:
 
         cout << "[Info]Scroll scoreboard.\n";
 
-        // Print scoreboard before scrolling (after flushing)
-        printScoreboard(true);
+        // Print scoreboard before scrolling (excluding frozen problems from ranking, but show frozen status)
+        printScoreboard(true, true);
 
-        // Track ranking changes
+        // Store ranking changes
         vector<tuple<string, string, int, int>> changes;
 
-        // Get the order before scrolling for comparison
-        auto getOrder = [this](bool includeFrozen) {
-            vector<string> order;
-            for (const auto& p : teams) {
-                order.push_back(p.first);
-            }
-            sort(order.begin(), order.end(),
-                 [this, includeFrozen](const string& a, const string& b) {
-                     return this->compareTeams(a, b, includeFrozen);
-                 });
-            return order;
-        };
+        // Get initial order (excluding frozen)
+        vector<string> prevOrder = getRankingOrder(true);
 
-        vector<string> prevOrder = getOrder(false);
-
-        // Process each scroll step
+        // Process each frozen problem
         while (true) {
-            // Find the lowest-ranked team with frozen problems
-            vector<string> teamsWithFrozen = getTeamsWithFrozenProblems();
+            // Find lowest-ranked team with frozen problems
+            vector<string> teamsWithFrozen;
+            for (const auto& p : teams) {
+                if (hasFrozenProblems(p.second)) {
+                    teamsWithFrozen.push_back(p.first);
+                }
+            }
+
             if (teamsWithFrozen.empty()) break;
 
-            // Sort by current ranking (lowest first)
-            sort(teamsWithFrozen.begin(), teamsWithFrozen.end(),
-                 [this](const string& a, const string& b) {
-                     return !this->compareTeams(a, b, true);  // Reverse order
-                 });
+            // Sort by current ranking (lowest first, i.e., reverse order)
+            sort(teamsWithFrozen.begin(), teamsWithFrozen.end(), [this](const string& a, const string& b) {
+                return !this->compareTeams(a, b, false);  // Include all solved problems
+            });
 
-            // The lowest ranked team
-            string& teamName = teamsWithFrozen.back();
-            char problem = getSmallestFrozenProblem(teamName);
+            // Get lowest-ranked team
+            string teamName = teamsWithFrozen.back();
+            char problem = getSmallestFrozenProblem(teams[teamName]);
 
             if (problem == '\0') break;
 
+            // Get the team's rank before unfreezing (excluding frozen)
+            int oldRank = getTeamRankFromOrder(teamName, prevOrder, true);
+
             // Unfreeze this problem
-            auto& team = teams[teamName];
-            auto& ps = team.problems[problem];
-            ps.frozen = false;
+            unfreezeProblem(teams[teamName], problem);
 
-            // If there were correct submissions after freeze, they become visible
-            // Check if the team solved this problem during freeze
-            // We need to track this from submissions
-            for (const auto& sub : team.submissions) {
-                if (sub.problem == problem && sub.afterFreeze && sub.status == Status::Accepted) {
-                    if (!ps.solved) {
-                        ps.solved = true;
-                        ps.solveTime = sub.time;
-                    }
-                }
+            // Get new order
+            vector<string> newOrder = getRankingOrder(false);
+
+            // Get the team's new rank
+            int newRank = getTeamRankFromOrder(teamName, newOrder, false);
+
+            // Check if ranking changed
+            if (newRank < oldRank) {
+                // Ranking improved - find the team that was replaced
+                string replacedTeam = prevOrder[newRank - 1];
+                int newSolved = getSolvedCount(teams[teamName], false);
+                int newPenalty = getPenaltyTime(teams[teamName], false);
+                changes.push_back({teamName, replacedTeam, newSolved, newPenalty});
             }
 
-            // Flush and recalculate rankings
-            prevOrder = getOrder(false);
-
-            // Find ranking changes
-            // After unfreezing, get new order
-            vector<string> newOrder = getOrder(true);
-
-            // Check if this team's ranking changed compared to before
-            for (size_t i = 0; i < newOrder.size(); i++) {
-                if (newOrder[i] == teamName) {
-                    // Find the team's old position
-                    for (size_t j = 0; j < prevOrder.size(); j++) {
-                        if (prevOrder[j] == teamName) {
-                            if ((int)i < (int)j) {
-                                // Ranking improved
-                                // Find the team that was replaced (was at position i before)
-                                string replacedTeam = prevOrder[i];
-                                int newSolved = team.getSolvedCount(problemCount, true);
-                                int newPenalty = team.getTotalPenalty(problemCount, true);
-                                changes.push_back({teamName, replacedTeam, newSolved, newPenalty});
-                            }
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
+            prevOrder = newOrder;
         }
 
         // Print ranking changes
@@ -381,17 +384,17 @@ private:
             cout << get<0>(c) << " " << get<1>(c) << " " << get<2>(c) << " " << get<3>(c) << "\n";
         }
 
-        // Print scoreboard after scrolling
-        printScoreboard(false);
+        // Print scoreboard after scrolling (no more frozen problems)
+        printScoreboard(false, false);
 
-        // Update frozen state and flush
+        // Clear frozen state and flush
         frozen = false;
         flushScoreboard();
     }
 
 public:
     void addTeam(const string& name) {
-        if (competitionStarted) {
+        if (started) {
             cout << "[Error]Add failed: competition has started.\n";
             return;
         }
@@ -403,51 +406,50 @@ public:
         cout << "[Info]Add successfully.\n";
     }
 
-    void startCompetition(int duration, int problems) {
-        if (competitionStarted) {
+    void startCompetition(int dur, int probs) {
+        if (started) {
             cout << "[Error]Start failed: competition has started.\n";
             return;
         }
-        durationTime = duration;
-        problemCount = problems;
-        competitionStarted = true;
+        duration = dur;
+        problemCount = probs;
+        started = true;
         cout << "[Info]Competition starts.\n";
     }
 
     void submit(const string& problem, const string& teamName, const string& status, int time) {
-        if (!competitionStarted) return;
+        if (!started) return;
 
         Status s = parseStatus(status);
         auto& team = teams[teamName];
         char p = problem[0];
 
-        bool afterFreeze = frozen;
-        team.submissions.push_back({p, s, time, afterFreeze});
+        team.submissions.push_back({p, s, time});
 
         auto& ps = team.problems[p];
 
-        if (ps.solved) {
-            // Already solved, this submission doesn't affect anything on scoreboard
-            return;
-        }
-
-        if (afterFreeze) {
-            // Submission during freeze period
-            ps.submitAfterFreeze++;
-            if (s == Status::Accepted) {
-                // Will be revealed during scroll
-                ps.frozen = true;
+        if (frozen) {
+            // Submission during freeze
+            if (!ps.solvedBeforeFreeze) {
+                // Problem not solved before freeze
+                ps.submitAfterFreeze++;
+                if (s == Status::Accepted) {
+                    // Will be revealed during scroll
+                } else {
+                    // Wrong during freeze, still frozen
+                }
             } else {
-                // Wrong attempt during freeze
-                ps.frozen = true;
+                // Already solved before freeze, just track but no effect on scoreboard
             }
         } else {
-            // Normal submission (not frozen)
-            if (s == Status::Accepted) {
+            // Normal submission
+            if (s == Status::Accepted && !ps.solved) {
                 ps.solved = true;
                 ps.solveTime = time;
-            } else {
-                ps.wrongAttempts++;
+                ps.wrongBeforeSolve = ps.wrongTotal;
+                ps.solvedBeforeFreeze = true;  // Mark as solved before any future freeze
+            } else if (s != Status::Accepted && !ps.solved) {
+                ps.wrongTotal++;
             }
         }
     }
@@ -461,6 +463,16 @@ public:
         if (frozen) {
             cout << "[Error]Freeze failed: scoreboard has been frozen.\n";
             return;
+        }
+        // Mark all problems with their state before freeze
+        for (auto& p : teams) {
+            for (auto& q : p.second.problems) {
+                if (q.second.solved) {
+                    q.second.solvedBeforeFreeze = true;
+                }
+                // Track wrong attempts before freeze for all problems (solved or not)
+                q.second.wrongBeforeFreeze = q.second.wrongTotal;
+            }
         }
         frozen = true;
         cout << "[Info]Freeze scoreboard.\n";
@@ -482,7 +494,7 @@ public:
             cout << "[Warning]Scoreboard is frozen. The ranking may be inaccurate until it were scrolled.\n";
         }
 
-        int rank = getTeamRank(teamName);
+        int rank = getStoredRank(teamName);
         cout << teamName << " NOW AT RANKING " << rank << "\n";
     }
 
@@ -552,9 +564,9 @@ int main() {
         if (cmd == "ADDTEAM") {
             system.addTeam(tokens[1]);
         } else if (cmd == "START") {
-            int duration = stoi(tokens[2]);
-            int problems = stoi(tokens[4]);
-            system.startCompetition(duration, problems);
+            int dur = stoi(tokens[2]);
+            int probs = stoi(tokens[4]);
+            system.startCompetition(dur, probs);
         } else if (cmd == "SUBMIT") {
             string problem = tokens[1];
             string teamName = tokens[3];
